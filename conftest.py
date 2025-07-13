@@ -11,6 +11,7 @@ os.environ['TESTING'] = 'true'
 os.environ['FLASK_ENV'] = 'testing'
 os.environ['WTF_CSRF_ENABLED'] = 'false'
 
+
 @pytest.fixture(scope='session')
 def test_app():
     """
