@@ -1,68 +1,201 @@
-name: PR Validation (Python)
+name: PR Validation (Python) - Fixed
 
 # Executa apenas em Pull Requests para main/master
 on:
   pull_request:
-    branches: [main, master]
+    branches: [ main, master ]
 
 jobs:
   validate:
     runs-on: ubuntu-latest
-
+    
+    # Configurar variáveis de ambiente para testes
+    env:
+      # Configuração para banco de teste em memória
+      DATABASE_URL: sqlite:///test.db
+      SQLALCHEMY_DATABASE_URI: sqlite:///test.db
+      # Configuração alternativa para banco em memória
+      TEST_DATABASE_URL: sqlite:///:memory:
+      # Configuração para ambiente de teste
+      FLASK_ENV: testing
+      DJANGO_SETTINGS_MODULE: myproject.settings.test
+      TESTING: true
+    
     steps:
-      # 1. Checkout do código
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # Necessário para SonarQube
+    # 1. Checkout do código
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Necessário para SonarQube
 
-      # 2. Setup Python
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.11"
+    # 2. Setup Python
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
 
-      # 3. Instalar dependências
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest pytest-cov
+    # 3. Criar diretórios necessários para banco de dados
+    - name: Create database directories
+      run: |
+        mkdir -p ./data
+        mkdir -p ./instance
+        mkdir -p ./tmp
+        # Criar arquivo de banco vazio se necessário
+        touch ./test.db
+        touch ./data/test.db
+        touch ./instance/test.db
+        # Dar permissões adequadas
+        chmod 666 ./test.db ./data/test.db ./instance/test.db 2>/dev/null || true
 
-      # 4. Executar testes com cobertura
-      - name: Run tests with coverage
-        run: pytest --cov=. --cov-report=xml --cov-report=term
+    # 4. Instalar dependências
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov
+        # Instalar SQLite se necessário
+        sudo apt-get update
+        sudo apt-get install -y sqlite3
 
-      # 5. Verificar cobertura mínima de 70%
-      - name: Check coverage threshold
-        run: |
-          COVERAGE=$(python -c "import xml.etree.ElementTree as ET; tree = ET.parse('coverage.xml'); root = tree.getroot(); print(float(root.attrib['line-rate']) * 100)")
+    # 5. Configurar banco de dados para testes
+    - name: Setup test database
+      run: |
+        # Se existe script de setup do banco, execute
+        if [ -f "setup_db.py" ]; then
+          python setup_db.py
+        fi
+        
+        # Se existe migrations (Flask-Migrate/Alembic)
+        if [ -f "migrations/alembic.ini" ] || [ -d "migrations" ]; then
+          echo "Setting up database migrations..."
+          if command -v flask &> /dev/null; then
+            flask db upgrade || echo "Flask-Migrate not available or no migrations"
+          elif command -v alembic &> /dev/null; then
+            alembic upgrade head || echo "Alembic upgrade failed or no migrations"
+          fi
+        fi
+        
+        # Se existe manage.py (Django)
+        if [ -f "manage.py" ]; then
+          echo "Setting up Django database..."
+          python manage.py migrate --run-syncdb || echo "Django migrations failed"
+        fi
+        
+        # Criar tabelas se existe script SQL
+        if [ -f "schema.sql" ]; then
+          sqlite3 test.db < schema.sql
+        fi
+
+    # 6. Executar testes com cobertura
+    - name: Run tests with coverage
+      run: |
+        # Configurar variáveis de ambiente específicas para testes
+        export DATABASE_URL="sqlite:///test.db"
+        export SQLALCHEMY_DATABASE_URI="sqlite:///test.db"
+        export TESTING=true
+        
+        # Executar testes
+        pytest --cov=. --cov-report=xml --cov-report=term --verbose
+      continue-on-error: false
+
+    # 7. Verificar cobertura mínima de 70%
+    - name: Check coverage threshold
+      run: |
+        if [ -f "coverage.xml" ]; then
+          # Método 1: Usar coverage.py para verificar
+          if command -v coverage &> /dev/null; then
+            COVERAGE=$(coverage report --show-missing | grep TOTAL | awk '{print $4}' | sed 's/%//')
+          else
+            # Método 2: Extrair do XML
+            COVERAGE=$(python -c "
+import xml.etree.ElementTree as ET
+try:
+    tree = ET.parse('coverage.xml')
+    root = tree.getroot()
+    line_rate = float(root.attrib.get('line-rate', 0))
+    print(f'{line_rate * 100:.1f}')
+except Exception as e:
+    print('0')
+")
+          fi
+          
           echo "Coverage: $COVERAGE%"
+          
+          # Verificar se atende o mínimo de 70%
           if (( $(echo "$COVERAGE < 70" | bc -l) )); then
             echo "❌ Coverage $COVERAGE% is below required 70%"
+            echo "Please add more tests to increase coverage."
             exit 1
           else
-            echo "✅ Coverage $COVERAGE% meets requirement"
+            echo "✅ Coverage $COVERAGE% meets requirement (≥70%)"
           fi
+        else
+          echo "⚠️ Coverage report not found. Make sure pytest-cov is generating coverage.xml"
+          exit 1
+        fi
 
-      # 6. Validar build (se aplicável)
-      - name: Build application
-        run: |
-          # Para Python, pode ser instalação do pacote ou outros comandos de build
-          python -m pip install .
-        continue-on-error: true
-      # 7. Análise SonarQube
-      - name: SonarQube Scan
-        uses: sonarsource/sonarqube-scan-action@master
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+    # 8. Validar build/instalação
+    - name: Build application
+      run: |
+        # Tentar instalar o pacote se existe setup.py
+        if [ -f "setup.py" ]; then
+          echo "Installing package with setup.py..."
+          python -m pip install -e .
+        elif [ -f "pyproject.toml" ]; then
+          echo "Installing package with pyproject.toml..."
+          python -m pip install -e .
+        else
+          echo "No setup.py or pyproject.toml found, skipping package installation"
+        fi
+        
+        # Verificar imports principais
+        python -c "
+import sys
+import os
+sys.path.insert(0, '.')
+try:
+    # Tentar importar módulos principais do projeto
+    import importlib
+    import pkgutil
+    
+    # Encontrar módulos Python no diretório atual
+    for importer, modname, ispkg in pkgutil.iter_modules(['.'], ''):
+        if not modname.startswith('test') and not modname.startswith('_'):
+            try:
+                importlib.import_module(modname)
+                print(f'✅ Successfully imported {modname}')
+            except Exception as e:
+                print(f'⚠️ Could not import {modname}: {e}')
+    print('✅ Build validation completed')
+except Exception as e:
+    print(f'⚠️ Build validation had issues: {e}')
+"
 
-      # 8. Verificar Quality Gate
-      - name: SonarQube Quality Gate check
-        uses: sonarsource/sonarqube-quality-gate-action@master
-        timeout-minutes: 5
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+    # 9. Análise SonarQube
+    - name: SonarQube Scan
+      uses: sonarsource/sonarqube-scan-action@master
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+    # 10. Verificar Quality Gate
+    - name: SonarQube Quality Gate check
+      uses: sonarsource/sonarqube-quality-gate-action@master
+      timeout-minutes: 5
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+    # 11. Upload de artefatos para debug (opcional)
+    - name: Upload test artifacts
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: test-results
+        path: |
+          coverage.xml
+          .coverage
+          test.db
+          *.log
+
