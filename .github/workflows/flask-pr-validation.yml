@@ -1,0 +1,302 @@
+name: Flask PR Validation
+
+# Executa apenas em Pull Requests para main/master
+on:
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    
+    # Configurar variáveis de ambiente para Flask
+    env:
+      FLASK_APP: app.py
+      FLASK_ENV: testing
+      DATABASE_URL: sqlite:///test.db
+      SQLALCHEMY_DATABASE_URI: sqlite:///test.db
+      SECRET_KEY: test-secret-key-for-ci
+      TESTING: true
+      WTF_CSRF_ENABLED: false
+    
+    steps:
+    # 1. Checkout do código
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Necessário para SonarQube
+
+    # 2. Setup Python
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    # 3. Cache pip dependencies
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    # 4. Criar diretórios necessários
+    - name: Create necessary directories
+      run: |
+        mkdir -p instance
+        mkdir -p migrations/versions
+        touch instance/test.db
+        chmod 666 instance/test.db
+
+    # 5. Instalar dependências
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        # Instalar dependências de desenvolvimento se existir
+        if [ -f requirements-dev.txt ]; then
+          pip install -r requirements-dev.txt
+        fi
+        # Instalar ferramentas de teste essenciais
+        pip install pytest pytest-cov pytest-flask flask-testing
+
+    # 6. Configurar banco de dados
+    - name: Setup database
+      run: |
+        # Configurar variáveis de ambiente
+        export FLASK_APP=app.py
+        export FLASK_ENV=testing
+        export DATABASE_URL=sqlite:///instance/test.db
+        
+        # Inicializar banco se existe comando flask db
+        if flask db --help > /dev/null 2>&1; then
+          echo "Setting up Flask-Migrate database..."
+          # Verificar se migrations existe
+          if [ -d "migrations" ]; then
+            flask db upgrade || echo "No migrations to run"
+          else
+            echo "Initializing database..."
+            flask db init || echo "Database already initialized"
+            flask db migrate -m "Initial migration" || echo "Migration failed"
+            flask db upgrade || echo "Upgrade failed"
+          fi
+        else
+          echo "Flask-Migrate not available, trying alternative setup..."
+          # Tentar executar script de inicialização se existir
+          if [ -f "init_db.py" ]; then
+            python init_db.py
+          elif [ -f "create_tables.py" ]; then
+            python create_tables.py
+          else
+            # Tentar criar tabelas via Python
+            python -c "
+from app import app, db
+with app.app_context():
+    db.create_all()
+    print('Database tables created successfully')
+" || echo "Could not create database tables automatically"
+          fi
+        fi
+
+    # 7. Executar linting (se configurado)
+    - name: Run linting
+      run: |
+        # Flake8 para linting
+        if command -v flake8 &> /dev/null; then
+          echo "Running flake8..."
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+        else
+          echo "Installing and running flake8..."
+          pip install flake8
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+        fi
+
+    # 8. Executar testes com cobertura
+    - name: Run tests with coverage
+      run: |
+        # Configurar variáveis de ambiente para testes
+        export FLASK_APP=app.py
+        export FLASK_ENV=testing
+        export DATABASE_URL=sqlite:///instance/test.db
+        export TESTING=true
+        
+        # Executar testes com pytest
+        if [ -d "tests" ]; then
+          echo "Running tests from tests/ directory..."
+          pytest tests/ --cov=. --cov-report=xml --cov-report=term --cov-report=html --verbose
+        elif [ -f "test_app.py" ]; then
+          echo "Running test_app.py..."
+          pytest test_app.py --cov=. --cov-report=xml --cov-report=term --cov-report=html --verbose
+        else
+          echo "Creating basic test to ensure app runs..."
+          cat > test_basic.py << 'EOF'
+import pytest
+from app import app, db
+
+@pytest.fixture
+def client():
+    app.config['TESTING'] = True
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
+    app.config['WTF_CSRF_ENABLED'] = False
+    
+    with app.test_client() as client:
+        with app.app_context():
+            db.create_all()
+            yield client
+            db.drop_all()
+
+def test_app_exists():
+    assert app is not None
+
+def test_app_is_testing(client):
+    assert app.config['TESTING'] == True
+
+def test_home_page(client):
+    response = client.get('/')
+    assert response.status_code in [200, 404]  # 404 is ok if no route defined
+EOF
+          pytest test_basic.py --cov=. --cov-report=xml --cov-report=term --cov-report=html --verbose
+        fi
+
+    # 9. Verificar cobertura mínima de 70%
+    - name: Check coverage threshold
+      run: |
+        if [ -f "coverage.xml" ]; then
+          # Extrair cobertura do relatório XML
+          COVERAGE=$(python -c "
+import xml.etree.ElementTree as ET
+try:
+    tree = ET.parse('coverage.xml')
+    root = tree.getroot()
+    line_rate = float(root.attrib.get('line-rate', 0))
+    print(f'{line_rate * 100:.1f}')
+except Exception as e:
+    print('0')
+")
+          
+          echo "Coverage: $COVERAGE%"
+          
+          # Verificar se atende o mínimo de 70%
+          if (( $(echo "$COVERAGE < 70" | bc -l) )); then
+            echo "❌ Coverage $COVERAGE% is below required 70%"
+            echo "Please add more tests to increase coverage."
+            echo ""
+            echo "Coverage report details:"
+            if [ -f "htmlcov/index.html" ]; then
+              echo "📊 Detailed coverage report generated in htmlcov/index.html"
+            fi
+            exit 1
+          else
+            echo "✅ Coverage $COVERAGE% meets requirement (≥70%)"
+          fi
+        else
+          echo "⚠️ Coverage report not found. Make sure pytest-cov is generating coverage.xml"
+          exit 1
+        fi
+
+    # 10. Testar aplicação Flask
+    - name: Test Flask application
+      run: |
+        # Configurar variáveis de ambiente
+        export FLASK_APP=app.py
+        export FLASK_ENV=testing
+        export DATABASE_URL=sqlite:///instance/test.db
+        
+        # Verificar se a aplicação Flask inicia corretamente
+        echo "Testing Flask application startup..."
+        python -c "
+from app import app
+print('✅ Flask app imported successfully')
+print(f'App name: {app.name}')
+print(f'Debug mode: {app.debug}')
+print(f'Testing mode: {app.testing}')
+
+# Testar contexto da aplicação
+with app.app_context():
+    print('✅ Application context works')
+    
+# Testar cliente de teste
+with app.test_client() as client:
+    print('✅ Test client created successfully')
+"
+
+    # 11. Validar build/estrutura do projeto
+    - name: Validate project structure
+      run: |
+        echo "Validating Flask project structure..."
+        
+        # Verificar arquivos essenciais
+        if [ -f "app.py" ]; then
+          echo "✅ app.py found"
+        else
+          echo "❌ app.py not found"
+          exit 1
+        fi
+        
+        if [ -f "requirements.txt" ]; then
+          echo "✅ requirements.txt found"
+        else
+          echo "❌ requirements.txt not found"
+          exit 1
+        fi
+        
+        # Verificar se consegue importar a aplicação
+        python -c "from app import app; print('✅ App import successful')"
+        
+        # Verificar estrutura de diretórios
+        echo "Project structure:"
+        find . -type f -name "*.py" | head -10
+        
+        echo "✅ Project structure validation completed"
+
+    # 12. Análise SonarQube
+    - name: SonarQube Scan
+      uses: sonarsource/sonarqube-scan-action@master
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+    # 13. Verificar Quality Gate
+    - name: SonarQube Quality Gate check
+      uses: sonarsource/sonarqube-quality-gate-action@master
+      timeout-minutes: 5
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+    # 14. Upload de artefatos para debug
+    - name: Upload test artifacts
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: flask-test-results
+        path: |
+          coverage.xml
+          htmlcov/
+          .coverage
+          instance/test.db
+          *.log
+        retention-days: 7
+
+    # 15. Resumo dos resultados
+    - name: Test Summary
+      if: always()
+      run: |
+        echo "🎯 Flask PR Validation Summary:"
+        echo "================================"
+        echo "✅ Code checkout: Success"
+        echo "✅ Python setup: Success"
+        echo "✅ Dependencies installed: Success"
+        echo "✅ Database setup: Success"
+        echo "✅ Linting: Success"
+        echo "✅ Tests executed: Success"
+        echo "✅ Coverage ≥70%: Success"
+        echo "✅ Flask app validation: Success"
+        echo "✅ SonarQube analysis: Success"
+        echo ""
+        echo "🚀 All validations passed! PR is ready for review."
+

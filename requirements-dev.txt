@@ -1,0 +1,42 @@
+# requirements-dev.txt - Dependências de desenvolvimento para Flask
+
+# Ferramentas de teste
+pytest>=7.0.0
+pytest-cov>=4.0.0
+pytest-flask>=1.2.0
+pytest-mock>=3.10.0
+flask-testing>=0.8.1
+
+# Ferramentas de qualidade de código
+flake8>=6.0.0
+black>=23.0.0
+isort>=5.12.0
+mypy>=1.0.0
+
+# Ferramentas de desenvolvimento
+python-dotenv>=1.0.0
+watchdog>=3.0.0
+
+# Ferramentas de debug
+flask-debugtoolbar>=0.13.1
+werkzeug>=2.3.0
+
+# Ferramentas de documentação
+sphinx>=6.0.0
+sphinx-rtd-theme>=1.2.0
+
+# Ferramentas de segurança
+bandit>=1.7.0
+safety>=2.3.0
+
+# Ferramentas de performance
+memory-profiler>=0.60.0
+line-profiler>=4.0.0
+
+# Ferramentas de mock/fake data
+factory-boy>=3.2.0
+faker>=18.0.0
+
+# Ferramentas de validação
+pre-commit>=3.0.0
+
