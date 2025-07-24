@@ -165,19 +165,24 @@ jobs:
         run: |
           # Verificar se coverage.xml existe
           if [ -f "coverage.xml" ]; then
-            COVERAGE=$(python -c "
-            import xml.etree.ElementTree as ET
-            try:
-                tree = ET.parse('coverage.xml')
-                root = tree.getroot()
-                coverage = float(root.attrib['line-rate']) * 100
-                print(f'{coverage:.1f}')
-            except Exception as e:
-                print('0.0')
-            ")
+            echo "📊 Found coverage.xml, extracting percentage..."
+            
+            # Criar script Python para extrair cobertura
+            cat > extract_coverage.py << 'EOF'
+          import xml.etree.ElementTree as ET
+          try:
+              tree = ET.parse('coverage.xml')
+              root = tree.getroot()
+              coverage = float(root.attrib['line-rate']) * 100
+              print(f'{coverage:.1f}')
+          except Exception as e:
+              print('0.0')
+          EOF
+            
+            COVERAGE=$(python extract_coverage.py)
+            echo "📊 Extracted coverage: $COVERAGE%"
           else
             echo "⚠️ coverage.xml not found, checking for alternative coverage info"
-            # Tentar extrair cobertura do output dos testes
             COVERAGE="0.0"
             if [ -f "test-results.xml" ]; then
               echo "📊 Test results found, setting basic coverage"
@@ -186,7 +191,7 @@ jobs:
           fi
           
           echo "percentage=$COVERAGE" >> $GITHUB_OUTPUT
-          echo "📊 Coverage: $COVERAGE%"
+          echo "📊 Final Coverage: $COVERAGE%"
           
           # Verificar se atende o mínimo (flexível para CI)
           if (( $(echo "$COVERAGE >= $MINIMUM_COVERAGE" | bc -l) )); then
@@ -295,6 +300,7 @@ jobs:
             test-report.html
             bandit-report.json
             setup_ci_db.py
+            extract_coverage.py
           retention-days: 30
 
   pr-comment:
