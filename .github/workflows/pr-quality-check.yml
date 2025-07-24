@@ -28,7 +28,7 @@ jobs:
         ref: ${{ github.event.pull_request.head.sha }}
     
     - name: 🐍 Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ env.PYTHON_VERSION }}
     
@@ -151,7 +151,7 @@ jobs:
         fi
     
     - name: 📤 Upload artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: pr-quality-reports
@@ -161,6 +161,7 @@ jobs:
           test-results.xml
           test-report.html
           bandit-report.json
+        retention-days: 30
 
   # Job: Comentário no PR
   pr-comment:
@@ -172,7 +173,7 @@ jobs:
     steps:
     - name: 💬 Comment PR - Success
       if: needs.quality-gate.result == 'success'
-      uses: actions/github-script@v6
+      uses: actions/github-script@v7
       with:
         script: |
           const coverage = '${{ needs.quality-gate.outputs.coverage-percentage }}';
@@ -201,7 +202,7 @@ jobs:
     
     - name: 💬 Comment PR - Failure
       if: needs.quality-gate.result == 'failure'
-      uses: actions/github-script@v6
+      uses: actions/github-script@v7
       with:
         script: |
           const coverage = '${{ needs.quality-gate.outputs.coverage-percentage }}' || '0.0';

@@ -25,12 +25,12 @@ jobs:
         fetch-depth: 0  # Necessário para SonarQube
     
     - name: 🐍 Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ env.PYTHON_VERSION }}
     
     - name: 📦 Cache dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: ~/.cache/pip
         key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
@@ -68,7 +68,7 @@ jobs:
         coverage-badge -o coverage-badge.svg || echo "Coverage badge generation failed"
     
     - name: 📤 Upload test results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: test-results
@@ -78,6 +78,7 @@ jobs:
           coverage.xml
           htmlcov/
           coverage-badge.svg
+        retention-days: 30
     
     - name: 📊 Coverage Report Summary
       run: |
@@ -112,7 +113,7 @@ jobs:
         fetch-depth: 0  # Necessário para análise completa
     
     - name: 🐍 Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ env.PYTHON_VERSION }}
     
@@ -123,7 +124,7 @@ jobs:
         pip install pytest pytest-cov
     
     - name: 📥 Download test artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: test-results
         path: ./
@@ -137,14 +138,6 @@ jobs:
             --junitxml=test-results.xml \
             -v
         fi
-    
-    - name: 🔍 SonarQube Scan
-      uses: sonarqube-quality-gate-action@master
-      with:
-        scanMetadataReportFile: .scannerwork/report-task.txt
-      env:
-        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
     
     - name: 🔍 Run SonarQube Scanner
       uses: sonarsource/sonarqube-scan-action@master
@@ -170,7 +163,7 @@ jobs:
       uses: actions/checkout@v4
     
     - name: 🐍 Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ env.PYTHON_VERSION }}
     
@@ -187,13 +180,14 @@ jobs:
         safety check
     
     - name: 📤 Upload security reports
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: security-reports
         path: |
           bandit-report.json
           safety-report.json
+        retention-days: 30
 
   # Job 4: Code Quality Checks
   code-quality:
@@ -205,7 +199,7 @@ jobs:
       uses: actions/checkout@v4
     
     - name: 🐍 Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ env.PYTHON_VERSION }}
     
