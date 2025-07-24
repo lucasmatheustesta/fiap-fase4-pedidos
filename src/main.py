@@ -62,4 +62,5 @@ def serve(path):
             })
 
 if __name__ == '__main__':
+    print("test 3")
     app.run(host='0.0.0.0', port=5000, debug=True)
