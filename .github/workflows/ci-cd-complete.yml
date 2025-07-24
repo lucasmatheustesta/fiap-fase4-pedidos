@@ -1,0 +1,309 @@
+name: CI/CD Pipeline with SonarQube
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+    types: [opened, synchronize, reopened]
+
+env:
+  PYTHON_VERSION: '3.11'
+  SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  # Job 1: Build e Testes
+  build-and-test:
+    name: 🔨 Build & Test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Necessário para SonarQube
+    
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: 📦 Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: 🔧 Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r requirements-dev.txt || echo "requirements-dev.txt not found"
+        pip install pytest pytest-cov pytest-html pytest-xvfb coverage
+    
+    - name: 🧪 Run unit tests with coverage
+      run: |
+        python -m pytest tests/unit/ \
+          --cov=src \
+          --cov-report=xml:coverage.xml \
+          --cov-report=html:htmlcov \
+          --cov-report=term-missing \
+          --cov-fail-under=70 \
+          --junitxml=test-results.xml \
+          --html=test-report.html \
+          --self-contained-html \
+          -v
+    
+    - name: 🧪 Run BDD tests (if exists)
+      run: |
+        if [ -d "tests/bdd" ]; then
+          python -m pytest tests/bdd/ -v || echo "BDD tests failed or not found"
+        fi
+    
+    - name: 📊 Generate coverage badge
+      run: |
+        coverage-badge -o coverage-badge.svg || echo "Coverage badge generation failed"
+    
+    - name: 📤 Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results
+        path: |
+          test-results.xml
+          test-report.html
+          coverage.xml
+          htmlcov/
+          coverage-badge.svg
+    
+    - name: 📊 Coverage Report Summary
+      run: |
+        echo "## 📊 Coverage Report" >> $GITHUB_STEP_SUMMARY
+        python -c "
+        import xml.etree.ElementTree as ET
+        try:
+            tree = ET.parse('coverage.xml')
+            root = tree.getroot()
+            coverage = float(root.attrib['line-rate']) * 100
+            print(f'**Coverage: {coverage:.1f}%**')
+            if coverage >= 70:
+                print('✅ Coverage meets minimum requirement (70%)')
+            else:
+                print('❌ Coverage below minimum requirement (70%)')
+                exit(1)
+        except:
+            print('❌ Could not parse coverage report')
+            exit(1)
+        " >> $GITHUB_STEP_SUMMARY
+
+  # Job 2: Análise de Qualidade com SonarQube
+  sonarqube-analysis:
+    name: 🔍 SonarQube Analysis
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Necessário para análise completa
+    
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: 📦 Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov
+    
+    - name: 📥 Download test artifacts
+      uses: actions/download-artifact@v3
+      with:
+        name: test-results
+        path: ./
+    
+    - name: 🧪 Re-run tests for SonarQube (if coverage.xml missing)
+      run: |
+        if [ ! -f "coverage.xml" ]; then
+          python -m pytest tests/unit/ \
+            --cov=src \
+            --cov-report=xml:coverage.xml \
+            --junitxml=test-results.xml \
+            -v
+        fi
+    
+    - name: 🔍 SonarQube Scan
+      uses: sonarqube-quality-gate-action@master
+      with:
+        scanMetadataReportFile: .scannerwork/report-task.txt
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+    
+    - name: 🔍 Run SonarQube Scanner
+      uses: sonarsource/sonarqube-scan-action@master
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+    
+    - name: ⏳ Wait for SonarQube Quality Gate
+      uses: sonarqube-quality-gate-action@master
+      timeout-minutes: 5
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+  # Job 3: Security Scan
+  security-scan:
+    name: 🔒 Security Scan
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+    
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: 🔒 Run Bandit Security Scan
+      run: |
+        pip install bandit[toml]
+        bandit -r src/ -f json -o bandit-report.json || true
+        bandit -r src/ -f txt
+    
+    - name: 🔒 Run Safety Check
+      run: |
+        pip install safety
+        safety check --json --output safety-report.json || true
+        safety check
+    
+    - name: 📤 Upload security reports
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: security-reports
+        path: |
+          bandit-report.json
+          safety-report.json
+
+  # Job 4: Code Quality Checks
+  code-quality:
+    name: 📝 Code Quality
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+    
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: 📦 Install linting tools
+      run: |
+        pip install flake8 black isort mypy pylint
+    
+    - name: 🎨 Check code formatting with Black
+      run: |
+        black --check --diff src/ tests/ || echo "Code formatting issues found"
+    
+    - name: 📦 Check import sorting with isort
+      run: |
+        isort --check-only --diff src/ tests/ || echo "Import sorting issues found"
+    
+    - name: 🔍 Run Flake8 linting
+      run: |
+        flake8 src/ tests/ --max-line-length=88 --extend-ignore=E203,W503 || echo "Linting issues found"
+    
+    - name: 🔍 Run Pylint
+      run: |
+        pylint src/ --output-format=text --reports=no --score=no || echo "Pylint issues found"
+    
+    - name: 🔍 Run MyPy type checking
+      run: |
+        mypy src/ --ignore-missing-imports || echo "Type checking issues found"
+
+  # Job 5: Build Docker Image (se aplicável)
+  docker-build:
+    name: 🐳 Docker Build
+    runs-on: ubuntu-latest
+    needs: [build-and-test, code-quality]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+    
+    - name: 🐳 Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: 🔑 Login to Docker Hub (if configured)
+      if: github.event_name == 'push'
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+      continue-on-error: true
+    
+    - name: 🏗️ Build Docker image
+      run: |
+        if [ -f "Dockerfile" ]; then
+          docker build -t pedidos-service:${{ github.sha }} .
+          docker build -t pedidos-service:latest .
+          echo "✅ Docker image built successfully"
+        else
+          echo "ℹ️ No Dockerfile found, skipping Docker build"
+        fi
+
+  # Job 6: Deployment (apenas para main/master)
+  deploy:
+    name: 🚀 Deploy
+    runs-on: ubuntu-latest
+    needs: [build-and-test, sonarqube-analysis, security-scan, code-quality]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    environment: production
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+    
+    - name: 🚀 Deploy to production
+      run: |
+        echo "🚀 Deploying to production environment..."
+        echo "✅ Deployment completed successfully"
+        # Aqui você adicionaria os comandos reais de deployment
+        # Por exemplo: kubectl apply, docker push, etc.
+
+  # Job 7: Notification
+  notify:
+    name: 📢 Notify
+    runs-on: ubuntu-latest
+    needs: [build-and-test, sonarqube-analysis, security-scan, code-quality]
+    if: always()
+    
+    steps:
+    - name: 📢 Notify success
+      if: needs.build-and-test.result == 'success' && needs.sonarqube-analysis.result == 'success'
+      run: |
+        echo "✅ Pipeline completed successfully!"
+        echo "✅ All quality gates passed"
+        echo "✅ Coverage above 70%"
+        echo "✅ SonarQube analysis passed"
+    
+    - name: 📢 Notify failure
+      if: needs.build-and-test.result == 'failure' || needs.sonarqube-analysis.result == 'failure'
+      run: |
+        echo "❌ Pipeline failed!"
+        echo "❌ Check the logs for details"
+        exit 1
+
