@@ -1,45 +1,72 @@
-# conftest.py - Configuração de testes para Flask
-# Coloque este arquivo na raiz do seu projeto Flask
+# conftest.py - Configuração LIMPA de testes para Flask
+# Remove o mock problemático de factories
 
 import pytest
 import os
+import sys
 import tempfile
-from app import app, db
 
-# Configurar variáveis de ambiente para testes
+# Configurar variáveis de ambiente ANTES de qualquer importação
 os.environ['TESTING'] = 'true'
 os.environ['FLASK_ENV'] = 'testing'
 os.environ['WTF_CSRF_ENABLED'] = 'false'
+os.environ['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
 
+# Adicionar src ao path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+
+# Importar após configurar ambiente
+from src.main import app, db
 
 @pytest.fixture(scope='session')
 def test_app():
     """
     Fixture para criar aplicação Flask de teste
     """
-    # Configuração de teste
+    # Forçar configuração de teste
     app.config.update({
         'TESTING': True,
         'SQLALCHEMY_DATABASE_URI': 'sqlite:///:memory:',
         'WTF_CSRF_ENABLED': False,
-        'SECRET_KEY': 'test-secret-key',
+        'SECRET_KEY': 'test-secret-key-12345',
         'SQLALCHEMY_TRACK_MODIFICATIONS': False,
+        'SQLALCHEMY_ENGINE_OPTIONS': {
+            'pool_pre_ping': True,
+            'pool_recycle': 300,
+        }
     })
     
-    # Criar contexto da aplicação
+    # Criar contexto da aplicação e configurar banco
     with app.app_context():
+        # Garantir que o db está inicializado com a app
+        db.init_app(app)
+        
         # Criar todas as tabelas
         db.create_all()
+        print("✅ Tabelas do banco criadas para testes")
+        
         yield app
+        
         # Cleanup após todos os testes
+        db.session.remove()
         db.drop_all()
+
+@pytest.fixture(scope='function')
+def app_context(test_app):
+    """
+    Fixture para contexto da aplicação
+    """
+    with test_app.app_context():
+        yield test_app
 
 @pytest.fixture(scope='function')
 def client(test_app):
     """
     Fixture para cliente de teste Flask
     """
-    return test_app.test_client()
+    with test_app.test_client() as client:
+        with test_app.app_context():
+            yield client
 
 @pytest.fixture(scope='function')
 def runner(test_app):
@@ -55,62 +82,32 @@ def db_session(test_app):
     Cria uma transação que é revertida após cada teste
     """
     with test_app.app_context():
+        # Garantir que as tabelas existem
+        db.create_all()
+        
         # Iniciar transação
         connection = db.engine.connect()
         transaction = connection.begin()
         
         # Configurar sessão para usar a transação
-        db.session.configure(bind=connection)
+        db.session.configure(bind=connection, binds={})
         
         yield db.session
         
         # Rollback da transação após o teste
+        db.session.remove()
         transaction.rollback()
         connection.close()
-        db.session.remove()
 
 @pytest.fixture(scope='function')
 def auth_headers():
     """
-    Fixture para headers de autenticação (se aplicável)
+    Fixture para headers de autenticação
     """
     return {
         'Content-Type': 'application/json',
         'Accept': 'application/json'
     }
-
-@pytest.fixture(scope='function')
-def sample_user(db_session):
-    """
-    Fixture para criar usuário de exemplo (ajuste conforme seus modelos)
-    """
-    try:
-        # Assumindo que você tem um modelo User
-        from app import User  # Ajuste conforme sua estrutura
-        
-        user = User(
-            username='testuser',
-            email='test@example.com',
-            # Adicione outros campos conforme necessário
-        )
-        db_session.add(user)
-        db_session.commit()
-        return user
-    except ImportError:
-        # Se não tiver modelo User, retornar None
-        return None
-
-@pytest.fixture(scope='function')
-def logged_in_user(client, sample_user):
-    """
-    Fixture para usuário logado (ajuste conforme seu sistema de auth)
-    """
-    if sample_user:
-        # Simular login (ajuste conforme sua implementação)
-        with client.session_transaction() as sess:
-            sess['user_id'] = sample_user.id
-            sess['_fresh'] = True
-    return sample_user
 
 @pytest.fixture(autouse=True)
 def setup_test_environment():
@@ -174,6 +171,11 @@ def pytest_configure(config):
     # Configurar logging para testes
     import logging
     logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
+    
+    # Garantir que o diretório database existe
+    database_dir = os.path.join(os.path.dirname(__file__), 'src', 'database')
+    if not os.path.exists(database_dir):
+        os.makedirs(database_dir, exist_ok=True)
 
 def pytest_unconfigure(config):
     """
@@ -181,17 +183,60 @@ def pytest_unconfigure(config):
     """
     pass
 
-# Marcadores personalizados
-pytest_plugins = []
-
-# Configuração para testes assíncronos (se usar)
+# Fixtures específicas para o projeto
 @pytest.fixture
-def event_loop():
+def sample_pedido_data():
     """
-    Fixture para loop de eventos assíncronos
+    Fixture com dados de exemplo para pedidos
     """
-    import asyncio
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
+    return {
+        'cliente_id': '12345678901',
+        'itens': [
+            {
+                'produto_id': 1,
+                'nome_produto': 'Hambúrguer',
+                'categoria': 'Lanche',
+                'quantidade': 2,
+                'preco_unitario': 15.50,
+                'observacoes': 'Sem cebola'
+            },
+            {
+                'produto_id': 2,
+                'nome_produto': 'Batata Frita',
+                'categoria': 'Acompanhamento',
+                'quantidade': 1,
+                'preco_unitario': 8.00
+            }
+        ]
+    }
+
+@pytest.fixture
+def sample_produto_data():
+    """
+    Fixture com dados de exemplo para produtos
+    """
+    return {
+        'produtos': [
+            {
+                'id': 1,
+                'nome': 'Hambúrguer',
+                'categoria': 'Lanche',
+                'preco': 15.50,
+                'descricao': 'Hambúrguer clássico',
+                'disponivel': True
+            },
+            {
+                'id': 2,
+                'nome': 'Batata Frita',
+                'categoria': 'Acompanhamento',
+                'preco': 8.00,
+                'disponivel': True
+            }
+        ]
+    }
+
+print("🧪 Configuração de testes Flask iniciada")
+print(f"📁 Diretório de trabalho: {os.getcwd()}")
+print(f"🐍 Python path: {sys.path[:3]}...")
+print("✅ Testes Flask finalizados")
 

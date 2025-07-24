@@ -1,264 +1,253 @@
 #!/usr/bin/env python3
 """
-Script de diagnóstico para projetos Flask
-Ajuda a identificar a estrutura do projeto e configurar testes
+Script de diagnóstico completo para identificar e corrigir problemas nos testes Flask
 """
 
 import os
 import sys
-import importlib
-from pathlib import Path
+import subprocess
+import json
 
-def print_header(title):
-    """Imprimir cabeçalho formatado"""
-    print(f"\n{'='*60}")
-    print(f"🔍 {title}")
-    print(f"{'='*60}")
-
-def print_section(title):
-    """Imprimir seção formatada"""
-    print(f"\n📋 {title}")
-    print("-" * 40)
-
-def check_project_structure():
-    """Verificar estrutura do projeto"""
-    print_section("Estrutura do Projeto")
+def verificar_estrutura_projeto():
+    """
+    Verifica a estrutura do projeto
+    """
+    print("🔍 VERIFICANDO ESTRUTURA DO PROJETO")
+    print("=" * 50)
     
-    current_dir = Path('.')
-    
-    # Arquivos Python
-    python_files = list(current_dir.glob('*.py'))
-    print(f"📄 Arquivos Python encontrados ({len(python_files)}):")
-    for file in sorted(python_files):
-        size = file.stat().st_size
-        print(f"  • {file.name} ({size} bytes)")
-    
-    # Diretórios importantes
-    important_dirs = ['tests', 'test', 'static', 'templates', 'migrations', 'instance']
-    print(f"\n📁 Diretórios importantes:")
-    for dir_name in important_dirs:
-        dir_path = current_dir / dir_name
-        if dir_path.exists():
-            files_count = len(list(dir_path.glob('*')))
-            print(f"  ✅ {dir_name}/ ({files_count} arquivos)")
-        else:
-            print(f"  ❌ {dir_name}/ (não encontrado)")
-    
-    # Arquivos de configuração
-    config_files = ['requirements.txt', 'requirements-dev.txt', 'pytest.ini', 'conftest.py', '.env', 'config.py']
-    print(f"\n⚙️ Arquivos de configuração:")
-    for file_name in config_files:
-        file_path = current_dir / file_name
-        if file_path.exists():
-            print(f"  ✅ {file_name}")
-        else:
-            print(f"  ❌ {file_name}")
-
-def check_python_modules():
-    """Verificar módulos Python disponíveis"""
-    print_section("Módulos Python Disponíveis")
-    
-    # Módulos essenciais
-    essential_modules = [
-        ('flask', 'Flask framework'),
-        ('flask_sqlalchemy', 'Flask-SQLAlchemy'),
-        ('pytest', 'Framework de testes'),
-        ('pytest_cov', 'Cobertura de código'),
+    arquivos_importantes = [
+        'src/main.py',
+        'src/models/pedido.py', 
+        'src/routes/pedidos.py',
+        'conftest.py',
+        'requirements.txt',
+        'pytest.ini'
     ]
     
-    # Módulos opcionais
-    optional_modules = [
-        ('flask_migrate', 'Flask-Migrate'),
-        ('flask_wtf', 'Flask-WTF'),
-        ('flask_login', 'Flask-Login'),
-        ('requests', 'HTTP requests'),
-        ('sqlalchemy', 'SQLAlchemy'),
-    ]
+    for arquivo in arquivos_importantes:
+        if os.path.exists(arquivo):
+            print(f"✅ {arquivo}")
+        else:
+            print(f"❌ {arquivo} - FALTANDO")
     
-    print("🔧 Módulos essenciais:")
-    for module_name, description in essential_modules:
-        try:
-            module = importlib.import_module(module_name)
-            version = getattr(module, '__version__', 'versão desconhecida')
-            print(f"  ✅ {module_name} ({version}) - {description}")
-        except ImportError:
-            print(f"  ❌ {module_name} - {description} (NÃO INSTALADO)")
-    
-    print("\n🔧 Módulos opcionais:")
-    for module_name, description in optional_modules:
-        try:
-            module = importlib.import_module(module_name)
-            version = getattr(module, '__version__', 'versão desconhecida')
-            print(f"  ✅ {module_name} ({version}) - {description}")
-        except ImportError:
-            print(f"  ⚠️ {module_name} - {description} (não instalado)")
+    print()
 
-def find_flask_app():
-    """Encontrar aplicação Flask no projeto"""
-    print_section("Procurando Aplicação Flask")
+def verificar_imports():
+    """
+    Verifica problemas de import nos arquivos de teste
+    """
+    print("🔍 VERIFICANDO IMPORTS NOS TESTES")
+    print("=" * 50)
     
-    # Arquivos possíveis
-    possible_files = ['app.py', 'main.py', 'run.py', 'server.py', 'application.py', '__init__.py']
+    import glob
     
-    # Nomes possíveis de variáveis
-    possible_app_names = ['app', 'application', 'flask_app', 'create_app']
+    arquivos_teste = glob.glob('tests/**/*.py', recursive=True) + glob.glob('test_*.py')
     
-    found_apps = []
+    problemas = []
     
-    for filename in possible_files:
-        file_path = Path(filename)
-        if not file_path.exists():
-            continue
-            
-        print(f"\n🔍 Analisando {filename}:")
+    for arquivo in arquivos_teste:
+        if os.path.isfile(arquivo):
+            try:
+                with open(arquivo, 'r', encoding='utf-8') as f:
+                    conteudo = f.read()
+                
+                if 'from app import' in conteudo:
+                    problemas.append(f"{arquivo}: Usa 'from app import' em vez de 'from src.main import'")
+                
+                if 'import app' in conteudo and 'src.main' not in conteudo:
+                    problemas.append(f"{arquivo}: Usa 'import app' em vez de 'import src.main'")
+                    
+            except Exception as e:
+                problemas.append(f"{arquivo}: Erro ao ler arquivo - {e}")
+    
+    if problemas:
+        print("❌ PROBLEMAS ENCONTRADOS:")
+        for problema in problemas:
+            print(f"  - {problema}")
+    else:
+        print("✅ Todos os imports estão corretos")
+    
+    print()
+    return len(problemas) == 0
+
+def verificar_configuracao_flask():
+    """
+    Verifica se a configuração Flask está correta
+    """
+    print("🔍 VERIFICANDO CONFIGURAÇÃO FLASK")
+    print("=" * 50)
+    
+    try:
+        # Configurar ambiente de teste
+        os.environ['TESTING'] = 'true'
+        os.environ['FLASK_ENV'] = 'testing'
         
-        try:
-            # Ler conteúdo do arquivo
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+        # Adicionar src ao path
+        sys.path.insert(0, 'src')
+        
+        from src.main import app, db
+        
+        print("✅ Importação da aplicação Flask: OK")
+        
+        # Testar configuração
+        with app.app_context():
+            print("✅ Contexto da aplicação: OK")
             
-            # Verificar imports do Flask
-            if 'from flask import' in content or 'import flask' in content:
-                print(f"  ✅ Imports do Flask encontrados")
+            # Verificar se db está inicializado
+            try:
+                db.create_all()
+                print("✅ Criação de tabelas: OK")
+            except Exception as e:
+                print(f"❌ Criação de tabelas: {e}")
+                return False
                 
-                # Tentar importar o módulo
-                module_name = file_path.stem
-                if module_name == '__init__':
-                    module_name = file_path.parent.name
-                
-                try:
-                    # Adicionar diretório atual ao path
-                    sys.path.insert(0, str(Path.cwd()))
-                    
-                    module = importlib.import_module(module_name)
-                    
-                    # Procurar aplicação Flask
-                    for app_name in possible_app_names:
-                        if hasattr(module, app_name):
-                            attr = getattr(module, app_name)
-                            
-                            # Verificar se é aplicação Flask
-                            if hasattr(attr, 'config') and hasattr(attr, 'route'):
-                                print(f"  ✅ Aplicação Flask: {module_name}.{app_name}")
-                                found_apps.append((module_name, app_name, 'instance'))
-                            
-                            # Verificar se é factory
-                            elif callable(attr):
-                                try:
-                                    test_app = attr()
-                                    if hasattr(test_app, 'config') and hasattr(test_app, 'route'):
-                                        print(f"  ✅ Factory Flask: {module_name}.{app_name}()")
-                                        found_apps.append((module_name, app_name, 'factory'))
-                                except:
-                                    pass
-                
-                except Exception as e:
-                    print(f"  ⚠️ Erro ao importar {module_name}: {e}")
-            
-            else:
-                print(f"  ❌ Não contém imports do Flask")
-                
-        except Exception as e:
-            print(f"  ❌ Erro ao ler arquivo: {e}")
-    
-    if found_apps:
-        print(f"\n🎉 Aplicações Flask encontradas:")
-        for module, app_name, app_type in found_apps:
-            print(f"  • {module}.{app_name} ({app_type})")
-    else:
-        print(f"\n❌ Nenhuma aplicação Flask encontrada")
-        print(f"💡 Verifique se você tem um arquivo com aplicação Flask configurada")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Erro na configuração Flask: {e}")
+        return False
 
-def check_database_config():
-    """Verificar configuração de banco de dados"""
-    print_section("Configuração de Banco de Dados")
+def verificar_rotas():
+    """
+    Verifica se as rotas estão registradas
+    """
+    print("🔍 VERIFICANDO ROTAS REGISTRADAS")
+    print("=" * 50)
     
-    # Procurar por configurações de banco
-    config_patterns = [
-        'SQLALCHEMY_DATABASE_URI',
-        'DATABASE_URL',
-        'sqlite',
-        'postgresql',
-        'mysql',
-        'flask_sqlalchemy',
-        'SQLAlchemy'
+    try:
+        os.environ['TESTING'] = 'true'
+        sys.path.insert(0, 'src')
+        
+        from src.main import app
+        
+        with app.app_context():
+            client = app.test_client()
+            
+            rotas_teste = [
+                ('/api/health', 'Health check'),
+                ('/api/info', 'Service info'),
+                ('/api/pedidos', 'Pedidos endpoint'),
+                ('/api/produtos', 'Produtos endpoint')
+            ]
+            
+            rotas_ok = 0
+            
+            for rota, descricao in rotas_teste:
+                try:
+                    response = client.get(rota)
+                    if response.status_code != 404:
+                        print(f"✅ {rota} ({descricao}): {response.status_code}")
+                        rotas_ok += 1
+                    else:
+                        print(f"❌ {rota} ({descricao}): 404 - Rota não encontrada")
+                except Exception as e:
+                    print(f"❌ {rota} ({descricao}): Erro - {e}")
+            
+            print(f"\n📊 Rotas funcionando: {rotas_ok}/{len(rotas_teste)}")
+            return rotas_ok == len(rotas_teste)
+            
+    except Exception as e:
+        print(f"❌ Erro ao verificar rotas: {e}")
+        return False
+
+def executar_teste_simples():
+    """
+    Executa um teste simples para verificar se está funcionando
+    """
+    print("🔍 EXECUTANDO TESTE SIMPLES")
+    print("=" * 50)
+    
+    try:
+        # Executar apenas um teste básico
+        result = subprocess.run([
+            'python', '-m', 'pytest', 
+            'tests/unit/test_routes.py::TestHealthEndpoint::test_health_check',
+            '-v', '--tb=short'
+        ], capture_output=True, text=True, env={**os.environ, 'TESTING': 'true'})
+        
+        if result.returncode == 0:
+            print("✅ Teste simples passou!")
+            return True
+        else:
+            print("❌ Teste simples falhou:")
+            print(result.stdout)
+            print(result.stderr)
+            return False
+            
+    except Exception as e:
+        print(f"❌ Erro ao executar teste: {e}")
+        return False
+
+def gerar_relatorio():
+    """
+    Gera relatório completo de diagnóstico
+    """
+    print("\n" + "=" * 60)
+    print("📋 RELATÓRIO DE DIAGNÓSTICO")
+    print("=" * 60)
+    
+    verificacoes = [
+        ("Estrutura do projeto", verificar_estrutura_projeto),
+        ("Imports nos testes", verificar_imports),
+        ("Configuração Flask", verificar_configuracao_flask),
+        ("Rotas registradas", verificar_rotas),
+        ("Teste simples", executar_teste_simples)
     ]
     
-    found_configs = []
+    resultados = {}
     
-    # Verificar arquivos Python
-    for py_file in Path('.').glob('*.py'):
+    for nome, funcao in verificacoes:
+        print(f"\n🔍 {nome}...")
         try:
-            with open(py_file, 'r', encoding='utf-8') as f:
-                content = f.read()
-            
-            for pattern in config_patterns:
-                if pattern in content:
-                    found_configs.append((py_file.name, pattern))
-        except:
-            continue
+            resultado = funcao()
+            resultados[nome] = resultado
+            status = "✅ OK" if resultado else "❌ FALHOU"
+            print(f"   {status}")
+        except Exception as e:
+            resultados[nome] = False
+            print(f"   ❌ ERRO: {e}")
     
-    if found_configs:
-        print("🗄️ Configurações de banco encontradas:")
-        for filename, pattern in found_configs:
-            print(f"  • {filename}: {pattern}")
+    print("\n" + "=" * 60)
+    print("📊 RESUMO FINAL")
+    print("=" * 60)
+    
+    total = len(resultados)
+    passou = sum(1 for r in resultados.values() if r)
+    
+    for nome, resultado in resultados.items():
+        status = "✅" if resultado else "❌"
+        print(f"{status} {nome}")
+    
+    print(f"\n🎯 RESULTADO: {passou}/{total} verificações passaram")
+    
+    if passou == total:
+        print("🎉 TUDO OK! Seu projeto está configurado corretamente.")
+        print("\n💡 Execute os testes:")
+        print("export TESTING=true")
+        print("python -m pytest --cov=src --cov-report=term-missing --cov-fail-under=70")
     else:
-        print("❌ Nenhuma configuração de banco encontrada")
-
-def generate_recommendations():
-    """Gerar recomendações baseadas no diagnóstico"""
-    print_section("Recomendações")
-    
-    current_dir = Path('.')
-    
-    # Verificar se conftest.py existe
-    if not (current_dir / 'conftest.py').exists():
-        print("📝 1. Criar conftest.py:")
-        print("   • Use o conftest_fixed.py fornecido")
-        print("   • Renomeie para conftest.py")
-    
-    # Verificar se pytest.ini existe
-    if not (current_dir / 'pytest.ini').exists():
-        print("📝 2. Criar pytest.ini:")
-        print("   • Configure parâmetros do pytest")
-        print("   • Defina cobertura mínima")
-    
-    # Verificar se há testes
-    test_files = list(current_dir.glob('test_*.py')) + list(current_dir.glob('*_test.py'))
-    if len(test_files) == 0:
-        print("📝 3. Criar testes:")
-        print("   • Use test_basic_flask.py como exemplo")
-        print("   • Crie pasta tests/ para organizar")
-    
-    # Verificar requirements
-    if not (current_dir / 'requirements.txt').exists():
-        print("📝 4. Criar requirements.txt:")
-        print("   • Liste dependências do projeto")
-        print("   • Inclua Flask e outras bibliotecas")
-    
-    print("\n💡 Para corrigir o erro de importação:")
-    print("   1. Use conftest_fixed.py (detecta automaticamente a aplicação)")
-    print("   2. Execute: python diagnose_project.py")
-    print("   3. Verifique se sua aplicação Flask foi encontrada")
-    print("   4. Execute: pytest test_basic_flask.py -v")
+        print("⚠️  PROBLEMAS ENCONTRADOS! Siga as correções sugeridas:")
+        print("\n🔧 SOLUÇÕES:")
+        
+        if not resultados.get("Imports nos testes", True):
+            print("1. Execute o script corrigir_imports.py")
+        
+        if not resultados.get("Configuração Flask", True):
+            print("2. Substitua conftest.py pelo conftest_final.py")
+        
+        if not resultados.get("Rotas registradas", True):
+            print("3. Verifique se as rotas estão sendo registradas no main.py")
 
 def main():
-    """Função principal"""
-    print_header("DIAGNÓSTICO DO PROJETO FLASK")
+    """
+    Função principal
+    """
+    print("🚀 DIAGNÓSTICO COMPLETO DO PROJETO FLASK")
+    print("=" * 60)
+    print("Este script vai identificar e sugerir correções para problemas nos testes.")
+    print()
     
-    print(f"📁 Diretório atual: {Path.cwd()}")
-    print(f"🐍 Python: {sys.version}")
-    print(f"📦 Pytest disponível: {'✅' if 'pytest' in sys.modules or importlib.util.find_spec('pytest') else '❌'}")
-    
-    check_project_structure()
-    check_python_modules()
-    find_flask_app()
-    check_database_config()
-    generate_recommendations()
-    
-    print_header("DIAGNÓSTICO CONCLUÍDO")
-    print("💡 Use as recomendações acima para configurar seu projeto")
-    print("🚀 Após as correções, execute: pytest --cov=. --cov-report=term")
+    gerar_relatorio()
 
 if __name__ == '__main__':
     main()

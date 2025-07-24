@@ -32,7 +32,7 @@ def service_info():
     return jsonify({
         'service': 'pedidos-service',
         'version': '1.0.0',
-        'description': 'Microsserviço responsável pelo gerenciamento de pedidos',
+        'description': 'Microsservico responsavel pelo gerenciamento de pedidos',
         'endpoints': {
             'health': '/api/health',
             'pedidos': '/api/pedidos',
