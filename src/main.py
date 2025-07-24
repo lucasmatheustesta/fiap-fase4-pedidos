@@ -14,6 +14,8 @@ app.config['SECRET_KEY'] = 'pedidos_service_secret_key_2024'
 # Configurar CORS para permitir comunicação entre microsserviços
 CORS(app, origins="*")
 
+print("Teste 2")
+
 # Registrar blueprints
 app.register_blueprint(pedidos_bp, url_prefix='/api')
 
