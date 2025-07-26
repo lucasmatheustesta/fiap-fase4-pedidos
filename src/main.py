@@ -62,5 +62,5 @@ def serve(path):
             })
 
 if __name__ == '__main__':
-    print("Iniciando o microsserviço de Pedidos...")
+    # print("Iniciando o microsserviço de Pedidos...")
     app.run(host='0.0.0.0', port=5000, debug=True)
