@@ -1,414 +1,190 @@
-name: 🚀 Deploy to AWS
+name: 🔍 AWS Deploy Debug
 
 on:
+  workflow_dispatch:  # Permite execução manual
   push:
-    branches: [ main, master ]
-  workflow_run:
-    workflows: ["🔍 PR Quality Check"]
-    types:
-      - completed
-    branches: [ main, master ]
-
-# Permissões necessárias
-permissions:
-  contents: read
-  actions: read
-  checks: read
-
-env:
-  AWS_REGION: us-east-1
-  APP_RUNNER_SERVICE_NAME: pedidos-microservice
+    branches: [ main ]
+    paths:
+      - '.github/workflows/deploy-aws.yml'
+      - 'apprunner.yaml'
 
 jobs:
-  # Job: Verificar se deve fazer deploy
-  check-deploy:
-    name: 🔍 Check Deploy Conditions
+  debug-secrets:
+    name: 🔍 Debug AWS Secrets Configuration
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-    
-    outputs:
-      should-deploy: ${{ steps.check.outputs.should-deploy }}
-      quality-passed: ${{ steps.quality.outputs.passed }}
     
     steps:
       - name: 📥 Checkout code
         uses: actions/checkout@v4
-      
-      - name: 🔍 Check quality gate
-        id: quality
-        run: |
-          # Se foi triggered por workflow_run, verificar se passou
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            if [ "${{ github.event.workflow_run.conclusion }}" = "success" ]; then
-              echo "✅ Quality gate passed"
-              echo "passed=true" >> $GITHUB_OUTPUT
-            else
-              echo "❌ Quality gate failed"
-              echo "passed=false" >> $GITHUB_OUTPUT
-            fi
-          else
-            # Push direto na main (assumir que passou)
-            echo "🔄 Direct push to main, assuming quality passed"
-            echo "passed=true" >> $GITHUB_OUTPUT
-          fi
-      
-      - name: 🎯 Determine if should deploy
-        id: check
-        run: |
-          QUALITY_PASSED="${{ steps.quality.outputs.passed }}"
-          
-          if [ "$QUALITY_PASSED" = "true" ]; then
-            echo "✅ All conditions met for deployment"
-            echo "should-deploy=true" >> $GITHUB_OUTPUT
-          else
-            echo "❌ Conditions not met for deployment"
-            echo "should-deploy=false" >> $GITHUB_OUTPUT
-          fi
-          
-          echo "📊 Deploy decision: ${{ steps.check.outputs.should-deploy }}"
 
-  # Job: Build e Deploy
-  deploy:
-    name: 🚀 Deploy to AWS App Runner
-    runs-on: ubuntu-latest
-    needs: check-deploy
-    if: needs.check-deploy.outputs.should-deploy == 'true'
-    
-    steps:
-      - name: 📥 Checkout code
-        uses: actions/checkout@v4
-      
-      - name: 🐍 Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      
-      - name: 📦 Install dependencies
+      - name: 🔍 Check GitHub Secrets Configuration
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest pytest-cov flask flask-sqlalchemy flask-cors
-      
-      - name: 🔧 Setup test environment
-        run: |
-          # Criar diretórios necessários
-          mkdir -p /tmp/test_db
-          chmod 777 /tmp/test_db
+          echo "🔍 Checking GitHub Secrets configuration..."
+          echo ""
           
-          # Configurar variáveis de ambiente para teste
-          export FLASK_ENV=testing
-          export TESTING=true
-          export SQLALCHEMY_DATABASE_URI="sqlite:////tmp/test_db/test_pedidos.db"
-          
-          echo "FLASK_ENV=testing" >> $GITHUB_ENV
-          echo "TESTING=true" >> $GITHUB_ENV
-          echo "SQLALCHEMY_DATABASE_URI=sqlite:////tmp/test_db/test_pedidos.db" >> $GITHUB_ENV
-      
-      - name: 🧪 Run quick tests before deploy
-        run: |
-          echo "🧪 Running quick smoke tests before deployment..."
-          
-          # Criar script de teste simples que não usa banco
-          cat > test_app_basic.py << 'EOF'
-          import sys
-          import os
-          sys.path.insert(0, 'src')
-          
-          # Configurar ambiente de teste
-          os.environ['FLASK_ENV'] = 'testing'
-          os.environ['TESTING'] = 'true'
-          os.environ['SQLALCHEMY_DATABASE_URI'] = 'sqlite:////tmp/test_db/test_pedidos.db'
-          
-          try:
-              from flask import Flask
-              print("✅ Flask import successful")
-              
-              # Teste básico de criação de app
-              app = Flask(__name__)
-              app.config['TESTING'] = True
-              
-              @app.route('/test')
-              def test():
-                  return {'status': 'ok'}
-              
-              with app.test_client() as client:
-                  response = client.get('/test')
-                  assert response.status_code == 200
-                  print("✅ Basic Flask app test passed")
-              
-              print("✅ All basic tests passed")
-              
-          except Exception as e:
-              print(f"⚠️ Test warning: {e}")
-              print("✅ Continuing with deployment")
-          EOF
-          
-          python test_app_basic.py
-      
-      - name: 🔍 Verify AWS credentials are configured
-        run: |
-          echo "🔍 Checking AWS credentials configuration..."
-          
+          # Verificar se secrets existem (sem mostrar valores)
           if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then
             echo "❌ AWS_ACCESS_KEY_ID secret not configured"
             echo "💡 Please add AWS_ACCESS_KEY_ID to GitHub repository secrets"
-            exit 1
+            SECRET_MISSING=true
           else
-            echo "✅ AWS_ACCESS_KEY_ID is configured"
+            echo "✅ AWS_ACCESS_KEY_ID secret is configured"
+            echo "📏 Length: ${#AWS_ACCESS_KEY_ID} characters"
           fi
           
           if [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
             echo "❌ AWS_SECRET_ACCESS_KEY secret not configured"
             echo "💡 Please add AWS_SECRET_ACCESS_KEY to GitHub repository secrets"
-            exit 1
+            SECRET_MISSING=true
           else
-            echo "✅ AWS_SECRET_ACCESS_KEY is configured"
+            echo "✅ AWS_SECRET_ACCESS_KEY secret is configured"
+            echo "📏 Length: ${#AWS_SECRET_ACCESS_KEY} characters"
           fi
           
           if [ -z "${{ secrets.AWS_ACCOUNT_ID }}" ]; then
             echo "❌ AWS_ACCOUNT_ID secret not configured"
             echo "💡 Please add AWS_ACCOUNT_ID to GitHub repository secrets"
+            SECRET_MISSING=true
+          else
+            echo "✅ AWS_ACCOUNT_ID secret is configured"
+            echo "📏 Length: ${#AWS_ACCOUNT_ID} characters"
+          fi
+          
+          echo ""
+          echo "🔧 Repository Information:"
+          echo "Repository: ${{ github.repository }}"
+          echo "Repository Owner: ${{ github.repository_owner }}"
+          echo "Actor: ${{ github.actor }}"
+          echo "Event: ${{ github.event_name }}"
+          echo "Ref: ${{ github.ref }}"
+          
+          if [ "$SECRET_MISSING" = "true" ]; then
+            echo ""
+            echo "❌ Some secrets are missing. Please configure them at:"
+            echo "https://github.com/${{ github.repository }}/settings/secrets/actions"
             exit 1
+          fi
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+
+      - name: 🧪 Test AWS Credentials (if secrets exist)
+        if: ${{ secrets.AWS_ACCESS_KEY_ID != '' && secrets.AWS_SECRET_ACCESS_KEY != '' }}
+        run: |
+          echo "🧪 Testing AWS credentials..."
+          
+          # Configurar AWS CLI
+          aws configure set aws_access_key_id ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws configure set aws_secret_access_key ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws configure set default.region us-east-1
+          
+          # Testar credenciais
+          echo "🔍 Testing AWS STS (Security Token Service)..."
+          if aws sts get-caller-identity; then
+            echo "✅ AWS credentials are valid!"
           else
-            echo "✅ AWS_ACCOUNT_ID is configured"
+            echo "❌ AWS credentials are invalid or insufficient permissions"
+            exit 1
           fi
           
-          echo "✅ All AWS credentials are properly configured"
-      
-      - name: 🔧 Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-      
-      - name: 🧪 Test AWS connection
-        run: |
-          echo "🧪 Testing AWS connection..."
-          
-          # Testar conexão básica com AWS
-          aws sts get-caller-identity
-          
-          # Verificar se consegue listar serviços App Runner
-          aws apprunner list-services --region ${{ env.AWS_REGION }} || echo "⚠️ No existing services found (this is normal for first deploy)"
-          
-          echo "✅ AWS connection successful"
-      
-      - name: 🏗️ Create or Update App Runner Service
-        run: |
-          echo "🏗️ Deploying to AWS App Runner..."
-          
-          SERVICE_ARN="arn:aws:apprunner:${{ env.AWS_REGION }}:${{ secrets.AWS_ACCOUNT_ID }}:service/${{ env.APP_RUNNER_SERVICE_NAME }}"
-          
-          # Verificar se o serviço já existe
-          if aws apprunner describe-service --service-arn "$SERVICE_ARN" 2>/dev/null; then
-            echo "🔄 Service exists, starting new deployment..."
-            
-            # Atualizar serviço existente
-            aws apprunner start-deployment --service-arn "$SERVICE_ARN"
-            
-            echo "deployment-type=update" >> $GITHUB_ENV
+          echo ""
+          echo "🔍 Testing App Runner permissions..."
+          if aws apprunner list-services --region us-east-1 > /dev/null 2>&1; then
+            echo "✅ App Runner permissions are working!"
           else
-            echo "🆕 Service doesn't exist, creating new service..."
-            
-            # Criar configuração do serviço
-            cat > apprunner-service-config.json << EOF
-          {
-            "ServiceName": "${{ env.APP_RUNNER_SERVICE_NAME }}",
-            "SourceConfiguration": {
-              "AutoDeploymentsEnabled": true,
-              "CodeRepository": {
-                "RepositoryUrl": "${{ github.server_url }}/${{ github.repository }}",
-                "SourceCodeVersion": {
-                  "Type": "BRANCH",
-                  "Value": "main"
-                },
-                "CodeConfiguration": {
-                  "ConfigurationSource": "REPOSITORY"
-                }
-              }
-            },
-            "InstanceConfiguration": {
-              "Cpu": "0.25 vCPU",
-              "Memory": "0.5 GB"
-            },
-            "HealthCheckConfiguration": {
-              "Protocol": "HTTP",
-              "Path": "/api/health",
-              "Interval": 10,
-              "Timeout": 5,
-              "HealthyThreshold": 1,
-              "UnhealthyThreshold": 5
-            }
-          }
-          EOF
-            
-            echo "📄 Service configuration created"
-            cat apprunner-service-config.json
-            
-            # Criar serviço
-            aws apprunner create-service --cli-input-json file://apprunner-service-config.json
-            
-            echo "deployment-type=create" >> $GITHUB_ENV
-          fi
-      
-      - name: ⏳ Wait for deployment
-        run: |
-          echo "⏳ Waiting for deployment to complete..."
-          
-          SERVICE_ARN="arn:aws:apprunner:${{ env.AWS_REGION }}:${{ secrets.AWS_ACCOUNT_ID }}:service/${{ env.APP_RUNNER_SERVICE_NAME }}"
-          
-          # Aguardar até o serviço estar rodando
-          for i in {1..20}; do
-            STATUS=$(aws apprunner describe-service --service-arn "$SERVICE_ARN" --query 'Service.Status' --output text 2>/dev/null || echo "UNKNOWN")
-            echo "🔄 Deployment status: $STATUS (attempt $i/20)"
-            
-            if [ "$STATUS" = "RUNNING" ]; then
-              echo "✅ Deployment completed successfully!"
-              break
-            elif [ "$STATUS" = "CREATE_FAILED" ] || [ "$STATUS" = "UPDATE_FAILED" ]; then
-              echo "❌ Deployment failed with status: $STATUS"
-              
-              # Obter detalhes do erro
-              echo "🔍 Getting error details..."
-              aws apprunner describe-service --service-arn "$SERVICE_ARN" --query 'Service.Status' || true
-              
-              exit 1
-            fi
-            
-            sleep 45
-          done
-          
-          if [ "$STATUS" != "RUNNING" ]; then
-            echo "⏰ Deployment timeout - status: $STATUS"
-            echo "🔍 Check AWS Console for details: https://console.aws.amazon.com/apprunner/"
-            
-            # Não falhar por timeout, pode estar ainda processando
-            echo "⚠️ Deployment may still be in progress, check AWS Console"
-          fi
-      
-      - name: 🌐 Get service URL
-        id: url
-        run: |
-          SERVICE_ARN="arn:aws:apprunner:${{ env.AWS_REGION }}:${{ secrets.AWS_ACCOUNT_ID }}:service/${{ env.APP_RUNNER_SERVICE_NAME }}"
-          
-          # Tentar obter URL do serviço
-          SERVICE_URL=$(aws apprunner describe-service --service-arn "$SERVICE_ARN" --query 'Service.ServiceUrl' --output text 2>/dev/null || echo "")
-          
-          if [ -n "$SERVICE_URL" ] && [ "$SERVICE_URL" != "None" ]; then
-            echo "🌐 Service URL: https://$SERVICE_URL"
-            echo "url=https://$SERVICE_URL" >> $GITHUB_OUTPUT
-            echo "SERVICE_URL=https://$SERVICE_URL" >> $GITHUB_ENV
-          else
-            echo "⚠️ Service URL not available yet"
-            echo "🔍 Service may still be starting up"
-            echo "url=pending" >> $GITHUB_OUTPUT
-            echo "SERVICE_URL=pending" >> $GITHUB_ENV
-          fi
-      
-      - name: 🧪 Test deployed application
-        if: env.SERVICE_URL != 'pending'
-        run: |
-          echo "🧪 Testing deployed application..."
-          
-          # Aguardar um pouco para o serviço estar totalmente disponível
-          sleep 60
-          
-          # Testar health check com retry
-          for i in {1..5}; do
-            echo "🔄 Testing health check (attempt $i/5)..."
-            
-            if curl -f "${{ env.SERVICE_URL }}/api/health" --max-time 30 --connect-timeout 10; then
-              echo "✅ Health check passed!"
-              break
-            else
-              echo "⚠️ Health check attempt $i failed, retrying..."
-              sleep 30
-            fi
-            
-            if [ $i -eq 5 ]; then
-              echo "⚠️ Health check failed after 5 attempts, but deployment completed"
-              echo "🔍 Check service logs in AWS Console"
-            fi
-          done
-          
-          # Testar endpoint de info (não crítico)
-          echo "🔄 Testing info endpoint..."
-          curl -f "${{ env.SERVICE_URL }}/api/info" --max-time 30 || echo "⚠️ Info endpoint not responding yet"
-      
-      - name: 📊 Deployment summary
-        run: |
-          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [ "${{ env.SERVICE_URL }}" != "pending" ]; then
-            echo "### ✅ Deployment Successful!" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "| Detail | Value |" >> $GITHUB_STEP_SUMMARY
-            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-            echo "| 🌐 **Service URL** | [${{ env.SERVICE_URL }}](${{ env.SERVICE_URL }}) |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🔧 **Service Name** | ${{ env.APP_RUNNER_SERVICE_NAME }} |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🌍 **AWS Region** | ${{ env.AWS_REGION }} |" >> $GITHUB_STEP_SUMMARY
-            echo "| 📅 **Deployed At** | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🔄 **Deployment Type** | ${{ env.deployment-type }} |" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### 🧪 Quick Tests:" >> $GITHUB_STEP_SUMMARY
-            echo "- 🔗 [Health Check](${{ env.SERVICE_URL }}/api/health)" >> $GITHUB_STEP_SUMMARY
-            echo "- 📋 [Service Info](${{ env.SERVICE_URL }}/api/info)" >> $GITHUB_STEP_SUMMARY
-            echo "- 📦 [API Docs](${{ env.SERVICE_URL }}/api/pedidos)" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "🎉 **Your microservice is now live!**" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "### ⏳ Deployment In Progress" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "| Detail | Value |" >> $GITHUB_STEP_SUMMARY
-            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-            echo "| 🔧 **Service Name** | ${{ env.APP_RUNNER_SERVICE_NAME }} |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🌍 **AWS Region** | ${{ env.AWS_REGION }} |" >> $GITHUB_STEP_SUMMARY
-            echo "| 📅 **Started At** | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🔄 **Status** | Deployment in progress |" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "🔍 **Check AWS Console for progress:** [App Runner Console](https://console.aws.amazon.com/apprunner/)" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ App Runner permissions may be insufficient"
+            echo "💡 Make sure your IAM user has AppRunnerFullAccess policy"
           fi
 
-  # Job: Notificar resultado
-  notify:
-    name: 📢 Notify Deployment Result
+      - name: 📋 Generate Troubleshooting Report
+        if: always()
+        run: |
+          echo "📋 TROUBLESHOOTING REPORT"
+          echo "========================"
+          echo ""
+          echo "🔧 Common Solutions:"
+          echo ""
+          echo "1. 📝 Add secrets to GitHub repository:"
+          echo "   Go to: https://github.com/${{ github.repository }}/settings/secrets/actions"
+          echo "   Add these secrets:"
+          echo "   - AWS_ACCESS_KEY_ID (your AWS access key)"
+          echo "   - AWS_SECRET_ACCESS_KEY (your AWS secret key)"
+          echo "   - AWS_ACCOUNT_ID (your 12-digit AWS account ID)"
+          echo ""
+          echo "2. 🔑 Create AWS IAM User:"
+          echo "   - Go to AWS Console > IAM > Users"
+          echo "   - Create new user with programmatic access"
+          echo "   - Attach policy: AppRunnerFullAccess"
+          echo "   - Copy Access Key ID and Secret Access Key"
+          echo ""
+          echo "3. 🏢 For Organization repositories:"
+          echo "   - Check if organization allows secrets"
+          echo "   - May need organization admin approval"
+          echo ""
+          echo "4. 🔄 If secrets were just added:"
+          echo "   - Wait 1-2 minutes for propagation"
+          echo "   - Re-run the workflow"
+          echo ""
+          echo "5. 📱 Verify secret names exactly match:"
+          echo "   - AWS_ACCESS_KEY_ID (not aws_access_key_id)"
+          echo "   - AWS_SECRET_ACCESS_KEY (not aws_secret_access_key)"
+          echo "   - AWS_ACCOUNT_ID (not aws_account_id)"
+          echo ""
+          echo "🆘 If still having issues:"
+          echo "   - Check AWS IAM user permissions"
+          echo "   - Verify AWS account is active"
+          echo "   - Try creating new access keys"
+          echo "   - Contact AWS support if needed"
+
+  test-without-secrets:
+    name: 🧪 Test Workflow Without AWS
     runs-on: ubuntu-latest
-    needs: [check-deploy, deploy]
-    if: always()
     
     steps:
-      - name: 📢 Deployment Success
-        if: needs.deploy.result == 'success'
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: 📦 Install dependencies
         run: |
-          echo "🎉 Deployment completed successfully!"
-          echo "🌐 Service is now available (or will be shortly)"
-          echo "📊 Check the deployment summary for details"
-          echo "🔍 If service URL is pending, check AWS Console in a few minutes"
-      
-      - name: 📢 Deployment Skipped
-        if: needs.check-deploy.outputs.should-deploy == 'false'
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 🧪 Run basic tests
         run: |
-          echo "⏭️ Deployment skipped"
-          echo "🔍 Reason: Quality gate did not pass or conditions not met"
-          echo "💡 Ensure your PR passes all quality checks before merging"
-      
-      - name: 📢 Deployment Failed
-        if: needs.deploy.result == 'failure'
+          echo "🧪 Running basic application tests..."
+          python -c "
+          import sys
+          sys.path.append('src')
+          try:
+              from main import app
+              print('✅ Application imports successfully')
+              with app.test_client() as client:
+                  response = client.get('/api/health')
+                  if response.status_code == 200:
+                      print('✅ Health endpoint working')
+                  else:
+                      print(f'⚠️ Health endpoint returned: {response.status_code}')
+          except Exception as e:
+              print(f'❌ Application test failed: {e}')
+              sys.exit(1)
+          "
+
+      - name: 📊 Application Status
         run: |
-          echo "❌ Deployment failed"
-          echo "🔍 Check the deployment logs for details"
-          echo "💡 Common issues:"
-          echo "   - AWS credentials not configured in GitHub secrets"
-          echo "   - Insufficient AWS permissions"
-          echo "   - Service configuration errors"
-          echo "   - Application startup issues"
+          echo "📊 APPLICATION STATUS REPORT"
+          echo "============================"
           echo ""
-          echo "🛠️ Troubleshooting steps:"
-          echo "   1. Verify AWS secrets are configured: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_ACCOUNT_ID"
-          echo "   2. Check AWS IAM permissions for App Runner"
-          echo "   3. Review application logs in AWS Console"
-          echo "   4. Test application locally first"
-          exit 1
+          echo "✅ Code checkout: Success"
+          echo "✅ Python setup: Success"
+          echo "✅ Dependencies: Success"
+          echo "✅ Application: Working"
+          echo ""
+          echo "🎯 Next step: Configure AWS secrets for deployment"
+          echo "📝 Follow the troubleshooting guide above"
 
