@@ -1,0 +1,45 @@
+version: 1.0
+runtime: python3
+build:
+  commands:
+    build:
+      - echo "🏗️ Starting build process..."
+      - echo "📦 Installing dependencies..."
+      - pip install --upgrade pip
+      - pip install -r requirements.txt
+      - echo "✅ Dependencies installed successfully"
+    
+    post_build:
+      - echo "🔧 Post-build configuration..."
+      - echo "📁 Checking application structure..."
+      - ls -la
+      - ls -la src/ || echo "⚠️ src directory not found"
+      - echo "🗄️ Creating database directory..."
+      - mkdir -p /tmp/db
+      - chmod 777 /tmp/db
+      - echo "🧪 Running basic validation..."
+      - python -c "print('✅ Python is working')"
+      - echo "✅ Post-build completed"
+
+run:
+  runtime-version: 3.11
+  command: python main_production.py
+  network:
+    port: 5000
+    env: PORT
+  env:
+    - name: FLASK_ENV
+      value: "production"
+    - name: FLASK_DEBUG
+      value: "False"
+    - name: PORT
+      value: "5000"
+    - name: PYTHONPATH
+      value: "/app:/app/src"
+    - name: SQLALCHEMY_DATABASE_URI
+      value: "sqlite:////tmp/db/pedidos_production.db"
+    - name: SECRET_KEY
+      value: "pedidos_production_secret_key_2024_aws"
+    - name: TESTING
+      value: "False"
+
