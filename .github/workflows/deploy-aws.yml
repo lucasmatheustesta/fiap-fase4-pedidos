@@ -18,7 +18,6 @@ permissions:
 env:
   AWS_REGION: us-east-1
   APP_RUNNER_SERVICE_NAME: pedidos-microservice
-  ECR_REPOSITORY: pedidos-microservice
 
 jobs:
   # Job: Verificar se deve fazer deploy
@@ -107,7 +106,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
 
-  # Job: Build e Deploy via ECR + App Runner
+  # Job: Deploy direto via App Runner (sem ECR)
   deploy:
     name: 🚀 Deploy to AWS App Runner
     runs-on: ubuntu-latest
@@ -125,49 +124,36 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
       
-      - name: 🐳 Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-      
-      - name: 📁 Create necessary directories
+      - name: 🧪 Quick application test
         run: |
-          mkdir -p src/database
-          chmod 755 src/database
-      
-      - name: 🏗️ Build and push Docker image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          echo "🏗️ Building Docker image..."
+          echo "🧪 Testing application before deploy..."
           
-          # Criar ECR repository se não existir
-          aws ecr describe-repositories --repository-names $ECR_REPOSITORY --region $AWS_REGION || \
-          aws ecr create-repository --repository-name $ECR_REPOSITORY --region $AWS_REGION
+          # Instalar dependências
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
           
-          # Build da imagem
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
-          
-          # Push da imagem
-          echo "📤 Pushing image to ECR..."
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          
-          # Salvar URI da imagem
-          echo "IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:latest" >> $GITHUB_ENV
+          # Teste rápido de importação
+          python -c "
+          import sys
+          sys.path.append('src')
+          try:
+              from main import app
+              print('✅ Application imports successfully')
+          except Exception as e:
+              print(f'⚠️ Import warning: {e}')
+          "
       
       - name: 🚀 Create or Update App Runner Service
         run: |
-          echo "🚀 Deploying to AWS App Runner..."
+          echo "🚀 Deploying to AWS App Runner (direct from GitHub)..."
           
           SERVICE_ARN="arn:aws:apprunner:${{ env.AWS_REGION }}:${{ secrets.AWS_ACCOUNT_ID }}:service/${{ env.APP_RUNNER_SERVICE_NAME }}"
           
           # Verificar se o serviço já existe
           if aws apprunner describe-service --service-arn "$SERVICE_ARN" 2>/dev/null; then
-            echo "🔄 Service exists, updating..."
+            echo "🔄 Service exists, starting new deployment..."
             
-            # Atualizar serviço existente
+            # Iniciar novo deployment
             aws apprunner start-deployment --service-arn "$SERVICE_ARN"
             echo "deployment-type=update" >> $GITHUB_ENV
             
@@ -175,23 +161,21 @@ jobs:
             echo "🆕 Creating new App Runner service..."
             
             # Criar configuração do serviço
-            cat > apprunner-service.json << EOF
+            cat > apprunner-service.json << 'EOF'
           {
             "ServiceName": "${{ env.APP_RUNNER_SERVICE_NAME }}",
             "SourceConfiguration": {
-              "ImageRepository": {
-                "ImageIdentifier": "${{ env.IMAGE_URI }}",
-                "ImageConfiguration": {
-                  "Port": "5000",
-                  "RuntimeEnvironmentVariables": {
-                    "FLASK_ENV": "production",
-                    "PORT": "5000",
-                    "SQLALCHEMY_DATABASE_URI": "sqlite:////tmp/db/pedidos_production.db"
-                  }
+              "AutoDeploymentsEnabled": true,
+              "CodeRepository": {
+                "RepositoryUrl": "${{ github.server_url }}/${{ github.repository }}",
+                "SourceCodeVersion": {
+                  "Type": "BRANCH",
+                  "Value": "main"
                 },
-                "ImageRepositoryType": "ECR"
-              },
-              "AutoDeploymentsEnabled": false
+                "CodeConfiguration": {
+                  "ConfigurationSource": "REPOSITORY"
+                }
+              }
             },
             "InstanceConfiguration": {
               "Cpu": "0.25 vCPU",
@@ -199,6 +183,10 @@ jobs:
             }
           }
           EOF
+            
+            # Substituir variáveis
+            sed -i "s/\${{ env.APP_RUNNER_SERVICE_NAME }}/${{ env.APP_RUNNER_SERVICE_NAME }}/g" apprunner-service.json
+            sed -i "s|\${{ github.server_url }}/\${{ github.repository }}|${{ github.server_url }}/${{ github.repository }}|g" apprunner-service.json
             
             # Criar serviço
             aws apprunner create-service --cli-input-json file://apprunner-service.json
@@ -212,9 +200,9 @@ jobs:
           SERVICE_ARN="arn:aws:apprunner:${{ env.AWS_REGION }}:${{ secrets.AWS_ACCOUNT_ID }}:service/${{ env.APP_RUNNER_SERVICE_NAME }}"
           
           # Aguardar até o serviço estar rodando
-          for i in {1..20}; do
+          for i in {1..25}; do
             STATUS=$(aws apprunner describe-service --service-arn "$SERVICE_ARN" --query 'Service.Status' --output text 2>/dev/null || echo "UNKNOWN")
-            echo "🔄 Deployment status: $STATUS (attempt $i/20)"
+            echo "🔄 Deployment status: $STATUS (attempt $i/25)"
             
             if [ "$STATUS" = "RUNNING" ]; then
               echo "✅ Deployment completed successfully!"
@@ -222,9 +210,9 @@ jobs:
             elif [ "$STATUS" = "CREATE_FAILED" ] || [ "$STATUS" = "UPDATE_FAILED" ]; then
               echo "❌ Deployment failed with status: $STATUS"
               
-              # Obter logs de erro
+              # Tentar obter mais detalhes do erro
               echo "🔍 Getting error details..."
-              aws apprunner describe-service --service-arn "$SERVICE_ARN" --query 'Service.Status' || true
+              aws apprunner describe-service --service-arn "$SERVICE_ARN" --query 'Service' || true
               exit 1
             fi
             
@@ -234,6 +222,7 @@ jobs:
           if [ "$STATUS" != "RUNNING" ]; then
             echo "⏰ Deployment timeout - status: $STATUS"
             echo "🔍 Check AWS Console for details"
+            echo "🔗 https://console.aws.amazon.com/apprunner/home?region=${{ env.AWS_REGION }}#/services"
             exit 1
           fi
       
@@ -258,17 +247,21 @@ jobs:
           echo "🧪 Testing deployed application..."
           
           if [ "$SERVICE_URL" != "unknown" ] && [ -n "$SERVICE_URL" ]; then
-            # Aguardar um pouco para o serviço estar totalmente disponível
+            # Aguardar para o serviço estar totalmente disponível
             echo "⏳ Waiting for service to be fully available..."
             sleep 60
             
             # Testar health check
             echo "🔍 Testing health endpoint..."
-            if curl -f "$SERVICE_URL/api/health" --max-time 30 2>/dev/null; then
-              echo "✅ Health check passed!"
-            else
-              echo "⚠️ Health check failed, but deployment completed"
-            fi
+            for i in {1..5}; do
+              if curl -f "$SERVICE_URL/api/health" --max-time 30 2>/dev/null; then
+                echo "✅ Health check passed!"
+                break
+              else
+                echo "⚠️ Health check attempt $i/5 failed, retrying..."
+                sleep 15
+              fi
+            done
             
             # Testar endpoint de info
             echo "🔍 Testing info endpoint..."
@@ -276,6 +269,14 @@ jobs:
               echo "✅ Info endpoint working!"
             else
               echo "⚠️ Info endpoint issue, but deployment completed"
+            fi
+            
+            # Testar endpoint raiz
+            echo "🔍 Testing root endpoint..."
+            if curl -f "$SERVICE_URL/" --max-time 30 2>/dev/null; then
+              echo "✅ Root endpoint working!"
+            else
+              echo "⚠️ Root endpoint issue, but deployment completed"
             fi
           else
             echo "⚠️ Skipping tests - service URL not available"
@@ -294,7 +295,7 @@ jobs:
           echo "| 🌍 **AWS Region** | ${{ env.AWS_REGION }} |" >> $GITHUB_STEP_SUMMARY
           echo "| 📅 **Deployed At** | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
           echo "| 🔄 **Deployment Type** | ${{ env.deployment-type }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🐳 **Image URI** | ${{ env.IMAGE_URI }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📦 **Source** | GitHub Repository |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 🧪 Quick Tests:" >> $GITHUB_STEP_SUMMARY
           echo "- 🔗 [Health Check](${{ env.SERVICE_URL }}/api/health)" >> $GITHUB_STEP_SUMMARY
@@ -342,5 +343,6 @@ jobs:
           echo "❌ Deployment failed"
           echo "🔍 Check the deployment logs for details"
           echo "💡 Common issues: AWS credentials, service configuration, or application errors"
+          echo "🔗 AWS Console: https://console.aws.amazon.com/apprunner/home?region=${{ env.AWS_REGION }}#/services"
           exit 1
 

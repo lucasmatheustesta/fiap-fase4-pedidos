@@ -3,12 +3,15 @@ runtime: python3
 build:
   commands:
     build:
-      - echo "🏗️ Installing dependencies..."
+      - echo "🏗️ Starting build process..."
+      - echo "📦 Installing Python dependencies..."
       - python -m pip install --upgrade pip
       - pip install -r requirements.txt
       - echo "📁 Creating necessary directories..."
       - mkdir -p /tmp/db
       - chmod 755 /tmp/db
+      - echo "🔍 Verifying application structure..."
+      - ls -la src/
       - echo "✅ Build completed successfully"
 run:
   runtime-version: 3.11
@@ -27,4 +30,6 @@ run:
       value: "False"
     - name: PYTHONPATH
       value: "/app/src"
+    - name: PYTHONUNBUFFERED
+      value: "1"
 
